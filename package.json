@@ -1,0 +1,17 @@
+{
+  "name": "amp-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.11.0",
+  "scripts": {
+    "dev": "corepack pnpm --filter @amp/desktop dev",
+    "build": "corepack pnpm --filter @amp/desktop build",
+    "start": "corepack pnpm --filter @amp/desktop exec electron .",
+    "typecheck": "corepack pnpm --filter @amp/desktop typecheck",
+    "smoke": "corepack pnpm --filter @amp/desktop smoke",
+    "dist": "corepack pnpm --filter @amp/desktop dist"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["electron", "electron-winstaller"]
+  }
+}

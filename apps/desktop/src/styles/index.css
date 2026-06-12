@@ -1,0 +1,326 @@
+@import "tailwindcss";
+/* Bundled Inter (variable) — the offline fallback for platforms without Apple's San Francisco. */
+@import "@fontsource-variable/inter";
+/* Schibsted Grotesk — the display voice: sharp, characterful, clearly not the body font. */
+@import "@fontsource-variable/schibsted-grotesk";
+
+:root {
+  /* Surfaces — layered from the window shell up to raised cards. A little more separation between
+     the steps than before gives the near-black UI real depth instead of reading as one flat slab. */
+  --shell: #0c0c0d;
+  --panel-strong: #161618;
+  --panel: #1d1d21;
+  --panel-soft: #26262b;
+  --paper: #f4f2ed;
+  --ink: #f4f2ed;
+  --muted: #a7a59f;
+  --faint: #74736e;
+  --edge: rgba(255, 255, 255, 0.06);
+  --edge-strong: rgba(255, 255, 255, 0.1);
+  --hairline: rgba(255, 255, 255, 0.055);
+  /* Idle accent is monotone; the current song's artwork overrides --acid at runtime. */
+  --acid: #e8e4da;
+  /* Raw "r, g, b" of the current song's colour, for rgba() gradients. */
+  --song-rgb: 232, 228, 218;
+  --spotify: #a8a6a0;
+  --soundcloud: #a8a6a0;
+  /* Provider tints — the one place colour breaks the monotone, so the mixed Library list can tell
+     Spotify (green) and SoundCloud (orange) tracks apart at a glance. */
+  --spotify-tint: #1ed760;
+  --soundcloud-tint: #ff7a36;
+  /* Reserved green — only connection status uses this. */
+  --connect: #1ed760;
+  --warn: #ffb259;
+
+  /* Corner radii — one consistent scale so cards, pills and inputs feel like one family.
+     Deliberately tight: sharp corners read pro-audio, not bubbly. */
+  --radius-sm: 5px;
+  --radius: 8px;
+  --radius-lg: 11px;
+  --radius-xl: 14px;
+
+  /* Elevation — soft, diffused shadows tuned for near-black surfaces (hard shadows disappear here;
+     these lean on a wide, low-opacity spread). --shadow-glow picks up the current song's colour. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 24px -8px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 24px 56px -20px rgba(0, 0, 0, 0.72);
+  /* A soft, subtle song-coloured glow — depth, not the heavy "moist" halo. */
+  --shadow-glow: 0 6px 24px -10px rgba(var(--song-rgb), 0.3);
+
+  /* Motion — shared curves so every transition feels like it came from the same hand. */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  /* macOS standard ease-in-out + a duration scale, so CSS transitions speak the same language as the
+     Framer spring system in lib/motion.ts. */
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --motion-quick: 160ms;
+  --motion-snap: 220ms;
+  --motion-drift: 480ms;
+
+  /* Modal/sheet backdrop scrim (the only survivor of the old vibrancy material set). */
+  --mat-scrim: rgba(8, 8, 10, 0.46);
+  /* Fine separators that read as material edges, not painted borders. */
+  --hairline-top: rgba(255, 255, 255, 0.1);
+  --hairline-bot: rgba(0, 0, 0, 0.22);
+
+  /* Refined macOS elevation: two-layer, low-opacity, large-spread. Keep --shadow-sm/md/lg/glow. */
+  --shadow-pop: 0 2px 8px rgba(0, 0, 0, 0.28), 0 8px 24px -6px rgba(0, 0, 0, 0.4);
+  --shadow-sheet: 0 4px 14px rgba(0, 0, 0, 0.34), 0 24px 64px -16px rgba(0, 0, 0, 0.62);
+  --shadow-song: 0 8px 26px -12px rgba(var(--song-rgb), 0.26);
+}
+
+@theme {
+  /* San Francisco on Apple platforms (the "MacBook font"); bundled Inter elsewhere (Windows/Linux),
+     so the UI looks the same everywhere and works offline. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter Variable", "Segoe UI",
+    system-ui, sans-serif;
+  --font-display: "Schibsted Grotesk Variable", -apple-system, BlinkMacSystemFont,
+    "SF Pro Display", "Inter Variable", "Segoe UI", system-ui, sans-serif;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--shell);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  /* Crisper type rendering and Inter's nicer alternates (single-storey a, tabular-ready figures). */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "cv01" 1, "cv03" 1, "ss01" 1;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+img {
+  display: block;
+}
+
+::selection {
+  background: rgba(var(--song-rgb), 0.34);
+  color: var(--ink);
+}
+
+.desktop-drag-region {
+  -webkit-app-region: drag;
+}
+
+.desktop-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  transition: background 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.24);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---- Compact minimal scale ---- */
+html {
+  font-size: 15px;
+}
+
+/* ---- Motion: hover / click / sliding ---- */
+button,
+a,
+[role="button"] {
+  transition:
+    background-color var(--motion-quick) var(--ease-standard),
+    border-color var(--motion-quick) var(--ease-standard),
+    color var(--motion-quick) var(--ease-standard),
+    transform 0.12s var(--ease-out),
+    box-shadow var(--motion-snap) var(--ease-standard),
+    opacity var(--motion-quick) var(--ease-standard);
+}
+
+/* The press-scale fallback for plain buttons. Anything driven by a Framer `whileTap` opts out with
+   `data-motion` so the two don't stack into a mushy ~0.94 press. */
+button:not(:disabled):not([data-motion]):active,
+[role="button"]:not([data-motion]):active {
+  transform: scale(0.97);
+}
+
+/* ---- Keyboard focus: a subtle ring only where you type. Nav and buttons rely on their own
+   hover/active styling, so clicking around never leaves a stray outline behind. ---- */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(var(--song-rgb), 0.4);
+}
+
+/* ---- Cursors: every clickable control shows the hand cursor ---- */
+button:not(:disabled),
+a[href],
+[role="button"]:not([aria-disabled="true"]),
+label[for],
+select {
+  cursor: pointer;
+}
+
+button:disabled,
+[role="button"][aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+/* ---- Opt-in helpers shared across the app ---- */
+
+/* Aligned, non-jittering figures for clocks, durations and counts. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "cv01" 1;
+}
+
+/* The one sanctioned small-caps label (player rail headers, tiny meta). Everything else uses
+   font-display headings — see SectionHeader in App.tsx. */
+.kicker {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* A raised card: faint top light + hairline edge + soft elevation. The top-light gradient is what
+   sells "lit from above" on dark surfaces and makes panels feel physical rather than painted on. */
+.surface {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 38%),
+    var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+
+.surface-interactive {
+  transition:
+    border-color 0.2s ease,
+    background-color 0.2s ease,
+    box-shadow 0.24s var(--ease-out),
+    transform 0.18s var(--ease-out);
+}
+
+.surface-interactive:hover {
+  border-color: var(--edge-strong);
+  box-shadow: var(--shadow-lg);
+}
+
+/* ---- Surfaces: classic flat panels (no glass/blur/translucency). These class names are kept so the
+   components don't need touching, but they now render as solid opaque surfaces. ---- */
+.vibrancy {
+  /* No backdrop blur — classic flat look. */
+}
+.glass-panel {
+  /* Translucent panel with a whisper of top-light. Being see-through lets the app root's single
+     top-left song wash show THROUGH the sidebar and Now Playing rail — so the glow reads as one
+     continuous sky across all three columns, with just one cheap gradient paint (no per-panel
+     gradient, no background-attachment: fixed, which forced full-window repaints and made the UI
+     lag). The panel tint stays high enough that text/controls keep full contrast. */
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 30%),
+    rgba(20, 20, 23, 0.74);
+}
+.glass-bar {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.022), rgba(255, 255, 255, 0) 26%),
+    var(--panel-strong);
+}
+.glass-popover {
+  background: var(--panel-strong);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+.glass-overlay {
+  background: var(--panel-strong);
+  border: 1px solid var(--edge);
+  box-shadow: var(--shadow-lg);
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 14px;
+  width: 14px;
+  border-radius: 999px;
+  background: var(--acid);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  transition:
+    transform 0.12s var(--ease-out),
+    box-shadow 0.16s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+input[type="range"]:active::-webkit-slider-thumb {
+  transform: scale(1.35);
+  /* A soft song-coloured halo while scrubbing — the macOS "live control" cue. */
+  box-shadow: 0 0 0 6px rgba(var(--song-rgb), 0.2);
+}
+
+/* Firefox/Gecko mirror (Electron renders WebKit, but keep parity for dev-in-browser). */
+input[type="range"]::-moz-range-thumb {
+  height: 14px;
+  width: 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--acid);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+/* Respect reduced-motion: keep the app usable and calm for folks who ask for less movement. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

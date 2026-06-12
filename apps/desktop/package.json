@@ -1,0 +1,99 @@
+{
+  "name": "@amp/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AMP desktop app",
+  "author": "alesxxxx",
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --project tsconfig.json && vite build && node scripts/writeBundledConfig.mjs",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "preview": "vite preview",
+    "smoke": "pnpm exec electron .",
+    "dist": "npm run build && node scripts/runElectronBuilder.mjs",
+    "evs:signup": "python -m castlabs_evs.account signup",
+    "evs:reauth": "python -m castlabs_evs.account reauth",
+    "verify:vmp": "node scripts/verify-vmp.mjs"
+  },
+  "build": {
+    "appId": "com.amp.desktop",
+    "productName": "AMP",
+    "electronDist": "node_modules/electron/dist",
+    "afterPack": "scripts/sign-vmp.cjs",
+    "files": [
+      "dist/index.html",
+      "dist/assets/**/*",
+      "dist-electron/**/*",
+      "package.json",
+      "!node_modules/**/*"
+    ],
+    "directories": {
+      "buildResources": "build"
+    },
+    "protocols": [
+      {
+        "name": "AMP OAuth",
+        "schemes": [
+          "amp",
+          "musync"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.music",
+      "target": [
+        "dir"
+      ]
+    },
+    "win": {
+      "signAndEditExecutable": false,
+      "icon": "build/icon.ico",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "runAfterFinish": true,
+      "createDesktopShortcut": false,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AMP",
+      "include": "build/installer.nsh"
+    }
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource-variable/schibsted-grotesk": "^5.2.8",
+    "@amp/core": "workspace:*",
+    "@spdl/widevine": "^0.3.1",
+    "clsx": "^2.1.1",
+    "dotenv": "^17.4.2",
+    "framer-motion": "^12.38.0",
+    "hls.js": "^1.6.16",
+    "lucide-react": "^1.8.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "react-router-dom": "^7.14.2",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.2.4",
+    "@types/node": "^25.6.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "autoprefixer": "^10.5.0",
+    "electron": "https://github.com/castlabs/electron-releases#v41.1.1+wvcus",
+    "electron-builder": "^26.8.1",
+    "postcss": "^8.5.10",
+    "tailwindcss": "^4.2.4",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.9",
+    "vite-plugin-electron": "^0.29.1",
+    "vite-plugin-electron-renderer": "^0.14.6"
+  }
+}

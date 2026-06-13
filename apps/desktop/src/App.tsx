@@ -558,19 +558,21 @@ export function App() {
           >
             <NoticeBanner />
             <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-6 pt-4">
-              <AnimatePresence mode="wait">
-                <Routes>
-                  <Route path="/" element={<PageFrame title="Home"><HomePage /></PageFrame>} />
-                  <Route path="/mix" element={<PageFrame title="Mix"><MixDetailPage /></PageFrame>} />
-                  <Route path="/artist" element={<PageFrame title="Artist"><ArtistPage /></PageFrame>} />
-                  <Route path="/album" element={<PageFrame title="Album"><AlbumPage /></PageFrame>} />
-                  <Route path="/search" element={<PageFrame title="Search"><SearchPage /></PageFrame>} />
-                  <Route path="/library" element={<PageFrame title="Library" fill><LibraryPage /></PageFrame>} />
-                  <Route path="/playlists" element={<PageFrame title="Playlists"><PlaylistsPage /></PageFrame>} />
-                  <Route path="/stats" element={<PageFrame title="Listening stats"><StatsPage /></PageFrame>} />
-                  <Route path="/settings" element={<PageFrame title="Settings"><SettingsPage /></PageFrame>} />
-                </Routes>
-              </AnimatePresence>
+              {/* No AnimatePresence/mode="wait" here: waiting for the outgoing page's exit to finish
+                  before mounting the next one added ~200ms of dead air to every tab switch. Each
+                  PageFrame fades itself in on mount (keyed by title), so the new page appears at once
+                  and the old one is dropped in the same commit — snappy, and never two pages stacked. */}
+              <Routes>
+                <Route path="/" element={<PageFrame title="Home"><HomePage /></PageFrame>} />
+                <Route path="/mix" element={<PageFrame title="Mix"><MixDetailPage /></PageFrame>} />
+                <Route path="/artist" element={<PageFrame title="Artist"><ArtistPage /></PageFrame>} />
+                <Route path="/album" element={<PageFrame title="Album"><AlbumPage /></PageFrame>} />
+                <Route path="/search" element={<PageFrame title="Search"><SearchPage /></PageFrame>} />
+                <Route path="/library" element={<PageFrame title="Library" fill><LibraryPage /></PageFrame>} />
+                <Route path="/playlists" element={<PageFrame title="Playlists"><PlaylistsPage /></PageFrame>} />
+                <Route path="/stats" element={<PageFrame title="Listening stats"><StatsPage /></PageFrame>} />
+                <Route path="/settings" element={<PageFrame title="Settings"><SettingsPage /></PageFrame>} />
+              </Routes>
             </div>
           </motion.main>
           {showQueue ? (
@@ -1757,10 +1759,13 @@ function PageFrame({ title, children, fill }: { title: string; children: ReactNo
   return (
     <motion.section
       key={title}
-      initial={{ opacity: 0, scale: 0.992 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.996 }}
-      transition={tween.page}
+      // Opacity-only fade on mount — no `scale`, no `exit`. Animating `scale` meant transforming the
+      // entire (often large) page subtree on the very frame it first mounts and paints, which dropped
+      // frames mid-transition; opacity alone is a pure compositor cross-fade. Dropping `exit` lets the
+      // previous page unmount in the same commit (no wait, no two-pages-stacked layout jump).
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={tween.quick}
       // `fill` pages own their scrolling (e.g. Library's virtualized list): the frame pins itself
       // to the route container's exact height so the outer page scrollbar never engages.
       className={fill ? "flex h-full min-h-0 flex-col gap-4" : "space-y-4"}

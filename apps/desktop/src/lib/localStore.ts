@@ -12,11 +12,13 @@ import {
   type UnifiedTrack
 } from "@amp/core";
 import { createDefaultConnections } from "./defaults";
+import type { TrackFeatureMap } from "./trackFeatures";
 
 const PLAYLISTS_KEY = "spot-cloud.playlists";
 const RECENTS_KEY = "spot-cloud.recent";
 const PROJECT_TRACKS_KEY = "spot-cloud.project-tracks";
 const UI_PREFS_KEY = "spot-cloud.ui-prefs";
+const AUDIO_FEATURES_KEY = "spot-cloud.audio-features";
 
 export type AccentSource = "artwork" | "audio" | "static";
 
@@ -327,6 +329,16 @@ export function loadOnboardingComplete(): boolean | undefined {
 export function saveOnboardingComplete(complete: boolean): void {
   const prefs = readJson<UiPreferences>(UI_PREFS_KEY, {});
   writeJson(UI_PREFS_KEY, { ...prefs, onboardingComplete: complete });
+}
+
+// ---- Per-track audio features (tempo/loudness/genre), cached once per track ----
+
+export function loadTrackFeatures(): TrackFeatureMap {
+  return readJson<TrackFeatureMap>(AUDIO_FEATURES_KEY, {});
+}
+
+export function saveTrackFeatures(map: TrackFeatureMap): void {
+  writeJson(AUDIO_FEATURES_KEY, map);
 }
 
 // ---- Local listening stats (private, on-device — no analytics leaves the machine) ----

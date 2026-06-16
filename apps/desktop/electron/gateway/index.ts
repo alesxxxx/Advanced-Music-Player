@@ -1,5 +1,6 @@
 import type { ProviderCollection, TrackCollection, UnifiedTrack } from "@amp/core";
 import { CacheStore } from "./CacheStore";
+import { DeezerGateway } from "./DeezerGateway";
 import { SoundCloudInternalGateway } from "./SoundCloudInternalGateway";
 import { SpotifyPartnerGateway } from "./SpotifyPartnerGateway";
 import type { GatewayRequest, GatewayResponse } from "./types";
@@ -10,11 +11,13 @@ export class ProviderGateway {
   private cache: CacheStore;
   private spotify: SpotifyPartnerGateway;
   private soundcloud: SoundCloudInternalGateway;
+  private deezer: DeezerGateway;
 
   constructor(userDataPath: string) {
     this.cache = new CacheStore(userDataPath);
     this.spotify = new SpotifyPartnerGateway(this.cache);
     this.soundcloud = new SoundCloudInternalGateway(this.cache);
+    this.deezer = new DeezerGateway(this.cache);
   }
 
   async initialize(): Promise<void> {
@@ -28,8 +31,25 @@ export class ProviderGateway {
         return this.handleSpotifyRequest(req);
       case "soundcloud":
         return this.handleSoundCloudRequest(req);
+      case "deezer":
+        return this.handleDeezerRequest(req);
       default:
         return { ok: false, error: `Unknown provider: ${req.provider}`, source: "fallback" };
+    }
+  }
+
+  private async handleDeezerRequest(req: GatewayRequest): Promise<GatewayResponse> {
+    switch (req.operation) {
+      case "getAudioFeatures": {
+        return this.deezer.getAudioFeatures({
+          title: req.variables?.title as string | undefined,
+          artist: req.variables?.artist as string | undefined,
+          durationMs: req.variables?.durationMs as number | undefined,
+          isrc: req.variables?.isrc as string | undefined
+        });
+      }
+      default:
+        return { ok: false, error: `Unknown Deezer operation: ${req.operation}`, source: "fallback" };
     }
   }
 

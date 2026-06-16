@@ -91,7 +91,8 @@ interface DesktopWindowState {
 }
 
 interface GatewayRequest {
-  provider: Provider;
+  // Deezer is an auxiliary catalogue provider (audio features only), not a playback Provider.
+  provider: Provider | "deezer";
   operation: string;
   variables?: Record<string, unknown>;
 }

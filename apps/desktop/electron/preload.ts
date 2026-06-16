@@ -18,7 +18,7 @@ contextBridge.exposeInMainWorld("spotCloud", {
     reload: () => ipcRenderer.invoke("spot-cloud:reload-runtime")
   },
   gateway: {
-    request: (req: { provider: "spotify" | "soundcloud"; operation: string; variables?: Record<string, unknown> }) =>
+    request: (req: { provider: "spotify" | "soundcloud" | "deezer"; operation: string; variables?: Record<string, unknown> }) =>
       ipcRenderer.invoke("spot-cloud:gateway-request", req)
   },
   config: {

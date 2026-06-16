@@ -56,8 +56,10 @@ import {
   loadProviderVolumes,
   loadRecentTracks,
   loadShuffle,
+  loadTrackFeatures,
   loadVolume,
   recordPlay,
+  saveTrackFeatures,
   replaceRecentTracks,
   saveAccentSource,
   saveBeatIntensity,
@@ -77,16 +79,26 @@ import {
   buildScoredStation,
   crossProviderKey,
   dedupeAcrossProviders,
+  detectScript,
   excludeArtist,
   limitPerArtist,
   normalizeArtist,
+  pickBestTwin,
   primaryArtist,
   scoreStationCandidate,
   topArtistClusters,
   trackKey,
   type HomeMix,
+  type ScriptTag,
   type StationSignals
 } from "@/lib/mixes/composition";
+import { normalizeGenres } from "@/lib/genreNormalize";
+import {
+  fetchDeezerFeatures,
+  makeTrackFeatures,
+  resolveTrackGenres,
+  type TrackFeatureMap
+} from "@/lib/trackFeatures";
 import { SoundCloudPlaybackAdapter } from "@/lib/providers/soundcloudAdapter";
 import { createSpotifyAdapter } from "@/lib/providers/createSpotifyAdapter";
 import type {
@@ -206,6 +218,11 @@ interface AppState {
   soundCloudLocalStatus: SoundCloudLocalStatus;
   soundCloudLocalError?: SoundCloudLocalError;
   spotifyLikedTrackIds: Set<string>;
+  /** Per-track audio features (tempo/loudness/genre) keyed by crossProviderKey; powers the Library
+   *  mood/genre chips and the radio scorer's vibe + genre signals. */
+  trackFeatures: TrackFeatureMap;
+  /** Whether a background feature-enrichment pass is currently running. */
+  featuresStatus: "idle" | "enriching";
   initialize(): Promise<void>;
   saveDesktopConfig(config: DesktopConfig): Promise<void>;
   reloadRuntime(): Promise<void>;
@@ -243,6 +260,8 @@ interface AppState {
   generateDailyMixes(force?: boolean): Promise<void>;
   /** Start a song-seeded cross-provider station and begin playing it. */
   startStation(seed: UnifiedTrack): Promise<void>;
+  /** Background-enrich library tracks with Deezer tempo/loudness + provider genres (throttled). */
+  enrichLibraryFeatures(): Promise<void>;
   /** Open a mix (Daily Mix, blend or station) in the detail track-list view. */
   openMix(mix: HomeMix): void;
   /** Load the artist profile (/artist route) for a track's primary artist. */
@@ -1111,6 +1130,8 @@ export const useAppStore = create<AppState>((set, get) => {
     soundCloudLocalStatus: "idle",
     soundCloudLocalError: undefined,
     spotifyLikedTrackIds: new Set<string>(),
+    trackFeatures: loadTrackFeatures(),
+    featuresStatus: "idle",
 
     async initialize() {
       if (get().initializing || get().initialized) {
@@ -2086,15 +2107,24 @@ export const useAppStore = create<AppState>((set, get) => {
       // neighbours into ~100 while staying anchored to the seed's neighbourhood.
       let scSeed: UnifiedTrack | undefined = seed.provider === "soundcloud" ? seed : undefined;
       if (!scSeed) {
+        // Pick the BEST title+artist+duration match, not the top text hit, so the station isn't
+        // anchored on a cover / remix / wrong-language upload with a similar name (the "it just
+        // searched the name" drift). Fall back to an artist-only match, then the raw top hit.
         const query = `${primaryArtist(seed)} ${seed.title}`.trim();
-        const scHits = (await soundCloudAdapter?.search(query).catch(() => [])) ?? [];
-        scSeed = scHits[0];
+        const titleHits = (await soundCloudAdapter?.search(query).catch(() => [])) ?? [];
+        scSeed = pickBestTwin(seed, titleHits);
+        if (!scSeed) {
+          const artistHits = (await soundCloudAdapter?.search(primaryArtist(seed)).catch(() => [])) ?? [];
+          scSeed = pickBestTwin(seed, artistHits, 2) ?? titleHits[0] ?? artistHits[0];
+        }
       }
 
       const hop1 = dedupeTracks(
         scSeed ? ((await soundCloudAdapter?.relatedTracks(scSeed).catch(() => [])) ?? []) : []
       );
-      const hop2Seeds = limitPerArtist(hop1, 1).slice(0, 5);
+      // Widen the hop-2 fan-out a little: with the genre/language gates below, more candidates is
+      // safe and gives the scorer more in-lane material to choose from.
+      const hop2Seeds = limitPerArtist(hop1, 1).slice(0, 8);
       const hop2Pools = await Promise.all(
         hop2Seeds.map((track) => soundCloudAdapter?.relatedTracks(track).catch(() => []) ?? [])
       );
@@ -2136,6 +2166,56 @@ export const useAppStore = create<AppState>((set, get) => {
             )
           : [];
 
+      // Build the candidate pool first — the vibe/genre/language signals below need every candidate.
+      const rawPool = dedupeTracks([...hop1, ...hop2, ...spotifyPools.flat()]).filter(
+        (track) => track.playable && trackKey(track) !== trackKey(seed)
+      );
+
+      // ---- Shared enrichment signals: tempo/loudness (Deezer) + normalized genres + language. ----
+      const featureMap = get().trackFeatures;
+      let seedFeatureRecord = featureMap[crossProviderKey(seed)];
+      if (!seedFeatureRecord && scSeed) {
+        seedFeatureRecord = featureMap[crossProviderKey(scSeed)];
+      }
+      let seedFeature = seedFeatureRecord
+        ? { bpm: seedFeatureRecord.bpm, loudness: seedFeatureRecord.loudness }
+        : undefined;
+      if (!seedFeature) {
+        // The seed drives vibe distance; fetch it once (cached) even if it isn't in the library.
+        const fetched = await fetchDeezerFeatures(seed).catch(() => null);
+        if (fetched?.ok) {
+          seedFeature = { bpm: fetched.bpm, loudness: fetched.loudness };
+        }
+      }
+      const seedGenres = new Set<string>(seedFeatureRecord?.genres ?? []);
+      for (const genre of normalizeGenres([seed.genre, scSeed?.genre])) {
+        seedGenres.add(genre);
+      }
+      const seedScript = detectScript(`${seed.title} ${seedArtistName}`);
+      const scriptCounts = new Map<ScriptTag, number>();
+      for (const item of get().projectTracks) {
+        const itemScript = detectScript(`${item.track.title} ${primaryArtist(item.track)}`);
+        scriptCounts.set(itemScript, (scriptCounts.get(itemScript) ?? 0) + 1);
+      }
+      const libraryScripts = new Set<ScriptTag>();
+      for (const [script, count] of scriptCounts) {
+        if (script !== "other" && count >= 3) {
+          libraryScripts.add(script);
+        }
+      }
+      const candidateFeatures = new Map<string, { bpm: number | null; loudness: number | null }>();
+      const candidateGenres = new Map<string, Set<string>>();
+      for (const track of rawPool) {
+        const record = featureMap[crossProviderKey(track)];
+        if (!record) {
+          continue;
+        }
+        candidateFeatures.set(trackKey(track), { bpm: record.bpm, loudness: record.loudness });
+        if (record.genres.length > 0) {
+          candidateGenres.set(trackKey(track), new Set(record.genres));
+        }
+      }
+
       // Score every candidate against the seed, then collapse cross-provider duplicates (the same
       // song on both platforms) keeping the seed's provider and the GROUP's best score — so a
       // Spotify twin of a hop-1 SoundCloud neighbour inherits the hop-1 provenance.
@@ -2147,11 +2227,14 @@ export const useAppStore = create<AppState>((set, get) => {
         neighbourArtistWeight,
         libraryArtists: new Set(
           get().projectTracks.map((item) => normalizeArtist(primaryArtist(item.track)))
-        )
+        ),
+        seedScript,
+        libraryScripts,
+        seedGenres,
+        candidateGenres,
+        seedFeature,
+        candidateFeatures
       };
-      const rawPool = dedupeTracks([...hop1, ...hop2, ...spotifyPools.flat()]).filter(
-        (track) => track.playable && trackKey(track) !== trackKey(seed)
-      );
       // The Spotify lane came from targeted artist searches on the seed's neighbourhood, so those
       // tracks carry real provenance the SoundCloud-graph scorer can't see. Credit it, or hop-1/2
       // membership buries every Spotify candidate (the 48-vs-2 station skew).
@@ -2181,6 +2264,108 @@ export const useAppStore = create<AppState>((set, get) => {
         mixId: station.id
       });
       set({ notice: `Station started from "${seed.title}".` });
+    },
+
+    async enrichLibraryFeatures() {
+      if (get().featuresStatus === "enriching") {
+        return;
+      }
+      const state = get();
+      const libraryTracks = [
+        ...(state.libraries.spotify?.items ?? []),
+        ...(state.libraries.soundcloud?.items ?? [])
+      ];
+      if (libraryTracks.length === 0) {
+        return;
+      }
+
+      // De-dupe by cross-provider key and skip tracks already probed (terminal records persist).
+      const existing = get().trackFeatures;
+      const pending = new Map<string, UnifiedTrack>();
+      for (const track of libraryTracks) {
+        const key = crossProviderKey(track);
+        if (!existing[key] && !pending.has(key)) {
+          pending.set(key, track);
+        }
+      }
+      if (pending.size === 0) {
+        return;
+      }
+
+      set({ featuresStatus: "enriching" });
+      try {
+        const pendingTracks = [...pending.values()];
+
+        // Batch-fetch Spotify artist genres up front (artist-level, ≤50/call) so each Spotify track
+        // resolves its genre without a per-track call.
+        let spotifyArtistGenres = new Map<string, string[]>();
+        const spotify = spotifyAdapter;
+        if (spotify && get().connections.spotify.status === "connected") {
+          const artistIds = Array.from(
+            new Set(
+              pendingTracks
+                .filter((track) => track.provider === "spotify")
+                .map((track) => track.creatorIds?.find(Boolean))
+                .filter((id): id is string => Boolean(id))
+            )
+          );
+          if (artistIds.length > 0) {
+            spotifyArtistGenres = await spotify
+              .getArtistGenres(artistIds)
+              .catch(() => new Map<string, string[]>());
+          }
+        }
+
+        // Throttled batches to stay under Deezer's ~50 req / 5s limit. Each track costs up to 2 calls
+        // (search + detail), so 4 tracks/sec ≈ 8 calls/sec — comfortably under the ceiling.
+        const BATCH_SIZE = 4;
+        const BATCH_GAP_MS = 1000;
+        const PERSIST_EVERY = 60;
+        const now = Date.now();
+        let sincePersist = 0;
+
+        for (let i = 0; i < pendingTracks.length; i += BATCH_SIZE) {
+          const batch = pendingTracks.slice(i, i + BATCH_SIZE);
+          const results = await Promise.all(
+            batch.map(async (track) => {
+              const deezer = await fetchDeezerFeatures(track).catch(() => ({
+                ok: false,
+                bpm: null,
+                loudness: null,
+                matched: false
+              }));
+              if (!deezer.ok) {
+                // Transient (e.g. quota) — leave unfetched so a later pass retries it.
+                return undefined;
+              }
+              return makeTrackFeatures(track, deezer, resolveTrackGenres(track, spotifyArtistGenres), now);
+            })
+          );
+
+          const batchUpdate: TrackFeatureMap = {};
+          for (const features of results) {
+            if (features) {
+              batchUpdate[features.key] = features;
+            }
+          }
+          if (Object.keys(batchUpdate).length > 0) {
+            const merged = { ...get().trackFeatures, ...batchUpdate };
+            set({ trackFeatures: merged });
+            sincePersist += Object.keys(batchUpdate).length;
+            if (sincePersist >= PERSIST_EVERY) {
+              saveTrackFeatures(merged);
+              sincePersist = 0;
+            }
+          }
+
+          if (i + BATCH_SIZE < pendingTracks.length) {
+            await new Promise<void>((resolve) => setTimeout(resolve, BATCH_GAP_MS));
+          }
+        }
+        saveTrackFeatures(get().trackFeatures);
+      } finally {
+        set({ featuresStatus: "idle" });
+      }
     },
 
     openMix(mix) {

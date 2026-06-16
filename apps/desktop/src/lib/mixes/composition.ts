@@ -1,4 +1,5 @@
 import type { Provider, UnifiedTrack } from "@amp/core";
+import { normalizeGenre } from "../genreNormalize";
 
 /**
  * Pure composition engine for Home "Daily Mixes" and song-seeded "Stations".
@@ -255,15 +256,156 @@ const TRAILING_CREDIT = /\b(?:feat\.?|ft\.?|featuring)\s+.+$/i;
  * stripped, punctuation collapsed) plus primary artist. Words like "remix"/"live" survive on purpose
  * — a remix is a different song and must not collapse into the original.
  */
-export function crossProviderKey(track: UnifiedTrack): string {
-  const title = track.title
+/** Normalized title: credits stripped, punctuation collapsed. Shared by cross-provider matching
+ *  and the station "twin" resolver. */
+export function normalizeTitle(title: string): string {
+  return title
     .toLowerCase()
     .replace(CREDIT_IN_BRACKETS, " ")
     .replace(TRAILING_CREDIT, " ")
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
-  return `${title}::${normalizeArtist(primaryArtist(track))}`;
+}
+
+export function crossProviderKey(track: UnifiedTrack): string {
+  return `${normalizeTitle(track.title)}::${normalizeArtist(primaryArtist(track))}`;
+}
+
+// ---- Script / language detection (for the station language gate) ----
+
+export type ScriptTag =
+  | "latin"
+  | "cyrillic"
+  | "cjk"
+  | "hangul"
+  | "arabic"
+  | "devanagari"
+  | "hebrew"
+  | "greek"
+  | "thai"
+  | "other";
+
+/**
+ * Dominant writing script of a string (title + artist). Catches the jarring "station switched to a
+ * different language" drift (English → Korean → Russian). Note: it groups all Latin-script
+ * languages together, so Spanish vs English is NOT distinguished — only genuine script jumps are.
+ */
+export function detectScript(text: string): ScriptTag {
+  const counts: Record<ScriptTag, number> = {
+    latin: 0,
+    cyrillic: 0,
+    cjk: 0,
+    hangul: 0,
+    arabic: 0,
+    devanagari: 0,
+    hebrew: 0,
+    greek: 0,
+    thai: 0,
+    other: 0
+  };
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0;
+    if ((code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a) || (code >= 0xc0 && code <= 0x24f)) {
+      counts.latin += 1;
+    } else if (code >= 0x400 && code <= 0x4ff) {
+      counts.cyrillic += 1;
+    } else if (code >= 0xac00 && code <= 0xd7a3) {
+      counts.hangul += 1;
+    } else if (
+      (code >= 0x3040 && code <= 0x30ff) || // hiragana + katakana → grouped with CJK
+      (code >= 0x4e00 && code <= 0x9fff) ||
+      (code >= 0x3400 && code <= 0x4dbf)
+    ) {
+      counts.cjk += 1;
+    } else if ((code >= 0x600 && code <= 0x6ff) || (code >= 0x750 && code <= 0x77f)) {
+      counts.arabic += 1;
+    } else if (code >= 0x900 && code <= 0x97f) {
+      counts.devanagari += 1;
+    } else if (code >= 0x590 && code <= 0x5ff) {
+      counts.hebrew += 1;
+    } else if (code >= 0x370 && code <= 0x3ff) {
+      counts.greek += 1;
+    } else if (code >= 0xe00 && code <= 0xe7f) {
+      counts.thai += 1;
+    }
+  }
+  // Bias toward non-Latin scripts: romanized artist names and loanwords inflate the Latin count, so
+  // a track with real CJK/Hangul/Cyrillic presence should be tagged by THAT script (it's the signal
+  // the language gate cares about), not drowned out by a romaji artist credit.
+  let total = 0;
+  let nonLatinBest: ScriptTag = "other";
+  let nonLatinCount = 0;
+  for (const key of Object.keys(counts) as ScriptTag[]) {
+    total += counts[key];
+    if (key !== "latin" && key !== "other" && counts[key] > nonLatinCount) {
+      nonLatinCount = counts[key];
+      nonLatinBest = key;
+    }
+  }
+  if (nonLatinCount > 0 && nonLatinCount >= Math.max(2, total * 0.2)) {
+    return nonLatinBest;
+  }
+  return counts.latin > 0 ? "latin" : "other";
+}
+
+// ---- Station seed "twin" resolution ----
+
+/**
+ * Confidence that `candidate` is the same recording as `seed` — title equality dominates, artist
+ * match and duration proximity refine. Used to stop the station engine from anchoring on the wrong
+ * SoundCloud upload (a cover/remix/same-title decoy), the core "it just searched the name" bug.
+ */
+export function scoreTwinMatch(seed: UnifiedTrack, candidate: UnifiedTrack): number {
+  const seedTitle = normalizeTitle(seed.title);
+  const candTitle = normalizeTitle(candidate.title);
+  const seedArtist = normalizeArtist(primaryArtist(seed));
+  const candArtist = normalizeArtist(primaryArtist(candidate));
+  let score = 0;
+
+  if (candTitle === seedTitle) {
+    score += 3;
+  } else if (seedTitle && (candTitle.includes(seedTitle) || seedTitle.includes(candTitle))) {
+    score += 1.5;
+  }
+  if (candArtist === seedArtist) {
+    score += 2;
+  } else if (seedArtist && (candArtist.includes(seedArtist) || seedArtist.includes(candArtist))) {
+    score += 1;
+  }
+  const delta = Math.abs(candidate.durationMs - seed.durationMs);
+  if (delta <= 3000) {
+    score += 1;
+  } else if (delta <= 8000) {
+    score += 0.5;
+  } else if (delta > 30000) {
+    score -= 1;
+  }
+  return score;
+}
+
+/** Best confident twin among `candidates`, or undefined if none clears `minScore`. */
+export function pickBestTwin(
+  seed: UnifiedTrack,
+  candidates: UnifiedTrack[],
+  minScore = 3.5
+): UnifiedTrack | undefined {
+  let best: UnifiedTrack | undefined;
+  let bestScore = -Infinity;
+  for (const candidate of candidates) {
+    const score = scoreTwinMatch(seed, candidate);
+    if (score > bestScore) {
+      bestScore = score;
+      best = candidate;
+    }
+  }
+  return best && bestScore >= minScore ? best : undefined;
+}
+
+/** Normalized top-level genre set for a single raw genre tag (fallback when no enrichment map). */
+function toGenreSet(genre: string | undefined): Set<string> {
+  const normalized = normalizeGenre(genre);
+  return normalized ? new Set<string>([normalized]) : new Set<string>();
 }
 
 /**
@@ -295,6 +437,18 @@ export interface StationSignals {
   neighbourArtistWeight: Map<string, number>;
   /** Normalized artists present in the user's library (familiarity nudge). */
   libraryArtists: Set<string>;
+  /** Dominant script of the seed (title+artist). Candidates in another script are gated out. */
+  seedScript?: ScriptTag;
+  /** Scripts well-represented in the user's library — relaxes the language gate for multilingual users. */
+  libraryScripts?: Set<ScriptTag>;
+  /** Normalized top-level genres of the seed (SoundCloud tag / Spotify artist genres). */
+  seedGenres?: Set<string>;
+  /** Per-candidate normalized genres, keyed by trackKey. */
+  candidateGenres?: Map<string, Set<string>>;
+  /** Seed tempo (bpm) + loudness, when known (Deezer enrichment). */
+  seedFeature?: { bpm: number | null; loudness: number | null };
+  /** Per-candidate tempo/loudness, keyed by trackKey. */
+  candidateFeatures?: Map<string, { bpm: number | null; loudness: number | null }>;
 }
 
 /**
@@ -320,9 +474,39 @@ export function scoreStationCandidate(track: UnifiedTrack, signals: StationSigna
   if (signals.libraryArtists.has(artist)) {
     score += 0.75;
   }
-  if (track.genre && signals.seed.genre && track.genre.toLowerCase() === signals.seed.genre.toLowerCase()) {
-    score += 1;
+
+  // Genre: reward overlap, softly penalize a mismatch. A soft penalty (not a hard gate) is what
+  // keeps a "balanced" station mostly in-lane while still allowing the occasional adjacent-genre
+  // left turn — versus the old +1 tiebreaker that a wrong-genre related track easily out-scored.
+  const seedGenres = signals.seedGenres ?? toGenreSet(signals.seed.genre);
+  const candGenres = signals.candidateGenres?.get(key) ?? toGenreSet(track.genre);
+  if (seedGenres.size > 0 && candGenres.size > 0) {
+    const overlaps = [...candGenres].some((genre) => seedGenres.has(genre));
+    score += overlaps ? 1.5 : -1.5;
   }
+
+  // Language gate: a different writing script is the "switched to another language" drift the user
+  // hit. Hard-penalize it (effectively a gate vs. the ~+6 max of provenance signals) UNLESS the
+  // user's own library shows they listen in that script.
+  if (signals.seedScript && signals.seedScript !== "other") {
+    const candScript = detectScript(`${track.title} ${primaryArtist(track)}`);
+    if (candScript !== "other" && candScript !== signals.seedScript) {
+      const allowed = signals.libraryScripts?.has(candScript) ?? false;
+      score += allowed ? -1 : -12;
+    }
+  }
+
+  // Vibe distance: when Deezer gave us tempo/loudness for BOTH, pull candidates far from the seed's
+  // feel down. Absent features → term is skipped (no penalty), so coverage gaps never break a station.
+  const seedFeature = signals.seedFeature;
+  const candFeature = signals.candidateFeatures?.get(key);
+  if (seedFeature?.bpm != null && candFeature?.bpm != null) {
+    score -= Math.min(Math.abs(candFeature.bpm - seedFeature.bpm) / 60, 1) * 1.5;
+    if (seedFeature.loudness != null && candFeature.loudness != null) {
+      score -= Math.min(Math.abs(candFeature.loudness - seedFeature.loudness) / 6, 1) * 0.5;
+    }
+  }
+
   // Mild vibe proxy: songs wildly longer/shorter than the seed (3+ min apart) score nothing here.
   const durationDelta = Math.abs(track.durationMs - signals.seed.durationMs);
   score += 0.5 * (1 - Math.min(durationDelta / 180_000, 1));

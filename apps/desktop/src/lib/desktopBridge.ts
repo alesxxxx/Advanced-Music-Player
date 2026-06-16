@@ -113,7 +113,7 @@ export function hasDesktopBridge(): boolean {
 }
 
 export async function gatewayRequest<T = unknown>(req: {
-  provider: "spotify" | "soundcloud";
+  provider: "spotify" | "soundcloud" | "deezer";
   operation: string;
   variables?: Record<string, unknown>;
 }): Promise<GatewayResponse<T>> {

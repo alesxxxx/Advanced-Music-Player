@@ -404,6 +404,51 @@ export abstract class SpotifyBaseAdapter implements PlaybackAdapter {
     return profile;
   }
 
+  /**
+   * Batch-fetch genres for many artist ids via `/artists?ids=` (≤50 per call). Spotify carries
+   * genres at the artist level, so this is how the Library's genre chips and the radio genre gate
+   * learn a Spotify track's genre (its tracks expose none). Per-artist cached like getArtist.
+   */
+  async getArtistGenres(artistIds: string[]): Promise<Map<string, string[]>> {
+    const result = new Map<string, string[]>();
+    const missing: string[] = [];
+    for (const id of artistIds) {
+      if (!id) {
+        continue;
+      }
+      const cached = this.getCachedValue(this.artistCache, `id:${id}`);
+      if (cached) {
+        result.set(id, cached.genres);
+      } else if (!result.has(id)) {
+        missing.push(id);
+      }
+    }
+
+    const unique = Array.from(new Set(missing));
+    for (let i = 0; i < unique.length; i += 50) {
+      const batch = unique.slice(i, i + 50);
+      let response: Response;
+      try {
+        response = await this.request(`/artists?ids=${batch.map(encodeURIComponent).join(",")}`);
+      } catch {
+        continue; // A failed batch just leaves those artists without genres — never fatal.
+      }
+      if (!response.ok) {
+        continue;
+      }
+      const json = (await response.json()) as { artists?: SpotifyApiArtist[] };
+      for (const artist of json.artists ?? []) {
+        if (!artist?.id) {
+          continue;
+        }
+        const profile = mapSpotifyApiArtist(artist);
+        this.setCachedValue(this.artistCache, `id:${profile.id}`, profile, CATALOG_CACHE_TTL_MS);
+        result.set(artist.id, profile.genres);
+      }
+    }
+    return result;
+  }
+
   async getArtistTopTracks(artistId: string): Promise<UnifiedTrack[]> {
     const cached = this.getCachedValue(this.artistTopTracksCache, artistId);
     if (cached) {

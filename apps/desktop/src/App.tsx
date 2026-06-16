@@ -81,6 +81,12 @@ import { VirtualList } from "@/components/VirtualList";
 import { DesktopTitleBar } from "@/components/DesktopTitleBar";
 import { cn, displayCreators, displayTitle, formatClock, formatDuration, providerLabel } from "@/lib/utils";
 import type { HomeMix } from "@/lib/mixes/composition";
+import {
+  featuresFor,
+  TEMPO_BUCKET_LABELS,
+  TEMPO_BUCKET_ORDER,
+  type TempoBucket
+} from "@/lib/trackFeatures";
 import { useAppStore } from "@/state/useAppStore";
 
 const navItems = [
@@ -3256,6 +3262,9 @@ function LibraryPage() {
   const spotifyLikedTrackIds = useAppStore((state) => state.spotifyLikedTrackIds);
   const shuffle = useAppStore((state) => state.shuffle);
   const toggleShuffle = useAppStore((state) => state.toggleShuffle);
+  const trackFeatures = useAppStore((state) => state.trackFeatures);
+  const featuresStatus = useAppStore((state) => state.featuresStatus);
+  const enrichLibraryFeatures = useAppStore((state) => state.enrichLibraryFeatures);
   const canSyncSpotifyLikes = connections.spotify.status === "connected";
   const [filter, setFilter] = useState("");
   const [trackToAdd, setTrackToAdd] = useState<UnifiedTrack | undefined>();
@@ -3263,6 +3272,7 @@ function LibraryPage() {
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
   const [multiAddOpen, setMultiAddOpen] = useState(false);
   const [providerFilter, setProviderFilter] = useState<"all" | Provider>("all");
+  const [selectedChip, setSelectedChip] = useState<string | null>(null);
   const query = filter.trim().toLowerCase();
   const canSyncSoundCloudLikes =
     connections.soundcloud.status === "connected" &&
@@ -3293,6 +3303,55 @@ function LibraryPage() {
         : scopedItems,
     [scopedItems, query]
   );
+  // Spotify-style filter chips, built dynamically from the library's enriched data: the tempo/energy
+  // moods and the most-represented genres that actually have tracks (plus an Unknown bucket for
+  // not-yet-enriched / unmatched tracks). Based on the provider scope so chips track the active tab.
+  const chips = useMemo(() => {
+    const moodCounts = new Map<TempoBucket, number>();
+    const genreCounts = new Map<string, number>();
+    let unknown = 0;
+    for (const track of scopedItems) {
+      const features = featuresFor(track, trackFeatures);
+      if (!features || (!features.tempoBucket && features.genres.length === 0)) {
+        unknown += 1;
+        continue;
+      }
+      if (features.tempoBucket) {
+        moodCounts.set(features.tempoBucket, (moodCounts.get(features.tempoBucket) ?? 0) + 1);
+      }
+      for (const genre of features.genres) {
+        genreCounts.set(genre, (genreCounts.get(genre) ?? 0) + 1);
+      }
+    }
+    const moodChips = TEMPO_BUCKET_ORDER.filter((bucket) => (moodCounts.get(bucket) ?? 0) > 0).map(
+      (bucket) => ({ id: `mood:${bucket}`, label: TEMPO_BUCKET_LABELS[bucket] })
+    );
+    const genreChips = [...genreCounts.entries()]
+      .filter(([, count]) => count >= 3)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 12)
+      .map(([genre]) => ({ id: `genre:${genre}`, label: genre }));
+    return { moodChips, genreChips, unknown };
+  }, [scopedItems, trackFeatures]);
+
+  const displayedItems = useMemo(() => {
+    if (!selectedChip) {
+      return items;
+    }
+    return items.filter((track) => {
+      const features = featuresFor(track, trackFeatures);
+      if (selectedChip === "unknown") {
+        return !features || (!features.tempoBucket && features.genres.length === 0);
+      }
+      if (selectedChip.startsWith("mood:")) {
+        return features?.tempoBucket === selectedChip.slice(5);
+      }
+      if (selectedChip.startsWith("genre:")) {
+        return features?.genres.includes(selectedChip.slice(6)) ?? false;
+      }
+      return true;
+    });
+  }, [items, selectedChip, trackFeatures]);
   const selectedTracks = useMemo(
     () => allItems.filter((item) => selectedKeys.has(item.id)),
     [allItems, selectedKeys]
@@ -3316,6 +3375,15 @@ function LibraryPage() {
     void hydrateLibraries();
   }, [hydrateLibraries]);
 
+  // Background-enrich the library with Deezer tempo/loudness + provider genres once it's loaded,
+  // so the mood/genre chips fill in (and the radio scorer gains real vibe data). Throttled and
+  // idempotent in the store, so re-running on library growth only fetches the new tracks.
+  useEffect(() => {
+    if (allItems.length > 0) {
+      void enrichLibraryFeatures();
+    }
+  }, [enrichLibraryFeatures, allItems.length]);
+
   return (
     <>
       {/* min-h-0 flex-1 inside the fill PageFrame: exact available height, so the VirtualList is
@@ -3334,17 +3402,21 @@ function LibraryPage() {
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {items.length > 0 ? (
+            {displayedItems.length > 0 ? (
               <Btn
                 kind="primary"
                 onClick={() => {
                   if (!shuffle) {
                     toggleShuffle();
                   }
-                  void playTrack(items[Math.floor(Math.random() * items.length)] ?? items[0], items, {
-                    kind: "library",
-                    label: "Liked Songs"
-                  });
+                  void playTrack(
+                    displayedItems[Math.floor(Math.random() * displayedItems.length)] ?? displayedItems[0],
+                    displayedItems,
+                    {
+                      kind: "library",
+                      label: "Liked Songs"
+                    }
+                  );
                 }}
               >
                 <Shuffle className="h-4 w-4" />
@@ -3378,7 +3450,10 @@ function LibraryPage() {
               <button
                 key={tab.id}
                 type="button"
-                onClick={() => setProviderFilter(tab.id)}
+                onClick={() => {
+                  setProviderFilter(tab.id);
+                  setSelectedChip(null);
+                }}
                 className={cn(
                   "rounded-full border px-4 py-1.5 text-sm font-medium transition",
                   active && !tab.tint
@@ -3401,6 +3476,48 @@ function LibraryPage() {
           })}
         </div>
 
+        {chips.moodChips.length > 0 || chips.genreChips.length > 0 ? (
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {[...chips.moodChips, ...chips.genreChips].map((chip) => {
+              const active = selectedChip === chip.id;
+              return (
+                <button
+                  key={chip.id}
+                  type="button"
+                  onClick={() => setSelectedChip(active ? null : chip.id)}
+                  className={cn(
+                    "rounded-full border px-3 py-1 text-xs font-medium transition",
+                    active
+                      ? "border-[var(--acid)] bg-[var(--acid)] text-[var(--shell)]"
+                      : "border-[var(--edge)] text-[var(--muted)] hover:text-[var(--paper)]"
+                  )}
+                >
+                  {chip.label}
+                </button>
+              );
+            })}
+            {chips.unknown > 0 ? (
+              <button
+                type="button"
+                onClick={() => setSelectedChip(selectedChip === "unknown" ? null : "unknown")}
+                className={cn(
+                  "rounded-full border px-3 py-1 text-xs font-medium transition",
+                  selectedChip === "unknown"
+                    ? "border-[var(--acid)] bg-[var(--acid)] text-[var(--shell)]"
+                    : "border-[var(--edge)] text-[var(--muted)] hover:text-[var(--paper)]"
+                )}
+              >
+                Unknown
+              </button>
+            ) : null}
+            {featuresStatus === "enriching" ? (
+              <span className="text-xs text-[var(--muted)]">Analyzing…</span>
+            ) : null}
+          </div>
+        ) : featuresStatus === "enriching" ? (
+          <p className="shrink-0 text-xs text-[var(--muted)]">Analyzing your library for moods &amp; genres…</p>
+        ) : null}
+
         <input
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
@@ -3410,22 +3527,22 @@ function LibraryPage() {
 
         {allItems.length ? (
           <p className="shrink-0 text-xs text-[var(--muted)]">
-            {query
-              ? `${items.length.toLocaleString()} of ${scopedItems.length.toLocaleString()} tracks`
+            {query || selectedChip
+              ? `${displayedItems.length.toLocaleString()} of ${scopedItems.length.toLocaleString()} tracks`
               : `${scopedItems.length.toLocaleString()} tracks`}
           </p>
         ) : null}
 
-        {items.length ? (
+        {displayedItems.length ? (
           <VirtualList
             className="min-h-0 flex-1 overflow-y-auto pr-1"
-            items={items}
+            items={displayedItems}
             rowHeight={64}
             getKey={(track) => track.id}
             renderRow={(track) => (
               <TrackListRow
                 track={track}
-                onPlay={() => void playTrack(track, items, { kind: "library", label: "Liked Songs" })}
+                onPlay={() => void playTrack(track, displayedItems, { kind: "library", label: "Liked Songs" })}
                 onAdd={() => setTrackToAdd(track)}
                 selecting={selecting}
                 selected={selectedKeys.has(track.id)}
@@ -3444,6 +3561,8 @@ function LibraryPage() {
           <EmptyState>
             {query && scopedItems.length > 0
               ? "No matches in your library."
+              : selectedChip && scopedItems.length > 0
+                ? "No tracks match this filter yet."
               : providerFilter !== "all" && allItems.length > 0
                 ? `No ${providerFilter === "spotify" ? "Spotify" : "SoundCloud"} tracks in your library yet.`
                 : librarySync.spotify.syncing || librarySync.soundcloud.syncing

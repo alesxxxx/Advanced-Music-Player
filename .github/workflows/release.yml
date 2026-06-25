@@ -121,8 +121,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --draft \
-            --title "AMP ${GITHUB_REF_NAME}" \
-            --generate-notes \
-            apps/desktop/dist/*.exe
+          # Non-destructive: if a release for this tag already exists (e.g. one cut by hand),
+          # leave it and its assets alone instead of failing or clobbering a signed installer.
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} already exists — leaving it and its assets untouched."
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --draft \
+              --title "AMP ${GITHUB_REF_NAME}" \
+              --generate-notes \
+              apps/desktop/dist/*.exe
+          fi

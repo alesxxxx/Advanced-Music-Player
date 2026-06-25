@@ -1957,7 +1957,10 @@ function TrackGrid({
   addDisabled,
   canSyncSoundCloudLikes,
   soundCloudLikedTrackIds,
-  onSoundCloudLikeToggle
+  onSoundCloudLikeToggle,
+  canSyncSpotifyLikes,
+  spotifyLikedTrackIds,
+  onSpotifyLikeToggle
 }: {
   tracks: UnifiedTrack[];
   onPlay(track: UnifiedTrack): void;
@@ -1966,12 +1969,32 @@ function TrackGrid({
   canSyncSoundCloudLikes?: boolean;
   soundCloudLikedTrackIds?: Set<string>;
   onSoundCloudLikeToggle?: (track: UnifiedTrack, liked: boolean) => void;
+  canSyncSpotifyLikes?: boolean;
+  spotifyLikedTrackIds?: Set<string>;
+  onSpotifyLikeToggle?: (track: UnifiedTrack, liked: boolean) => void;
 }) {
   return (
     <div className="grid gap-2.5 grid-cols-[repeat(auto-fill,minmax(155px,1fr))]">
       {tracks.map((track) => {
-        const canToggleSoundCloudLike = canSyncSoundCloudLikes && track.provider === "soundcloud";
-        const isLikedOnSoundCloud = soundCloudLikedTrackIds?.has(getTrackUiKey(track)) ?? false;
+        const likeProvider =
+          canSyncSoundCloudLikes && track.provider === "soundcloud"
+            ? "soundcloud"
+            : canSyncSpotifyLikes && track.provider === "spotify"
+              ? "spotify"
+              : null;
+        const isLiked =
+          likeProvider === "soundcloud"
+            ? soundCloudLikedTrackIds?.has(getTrackUiKey(track)) ?? false
+            : likeProvider === "spotify"
+              ? spotifyLikedTrackIds?.has(getTrackUiKey(track)) ?? false
+              : false;
+        const toggleLike = () => {
+          if (likeProvider === "soundcloud") {
+            onSoundCloudLikeToggle?.(track, !isLiked);
+          } else if (likeProvider === "spotify") {
+            onSpotifyLikeToggle?.(track, !isLiked);
+          }
+        };
 
         return (
           <div
@@ -2008,17 +2031,27 @@ function TrackGrid({
                 >
                   <Plus className="h-3.5 w-3.5" />
                 </button>
-                {canToggleSoundCloudLike ? (
+                {likeProvider ? (
                   <button
                     type="button"
-                    title={isLikedOnSoundCloud ? "Unlike on SoundCloud" : "Like on SoundCloud"}
-                    onClick={() => onSoundCloudLikeToggle?.(track, !isLikedOnSoundCloud)}
+                    title={
+                      isLiked
+                        ? `Unlike on ${providerLabel(likeProvider)}`
+                        : `Like on ${providerLabel(likeProvider)}`
+                    }
+                    onClick={toggleLike}
                     className={cn(
-                      "grid h-7 w-7 place-items-center rounded-full border border-[var(--edge)] text-[var(--muted)] transition hover:border-[var(--soundcloud)]/60 hover:text-[var(--soundcloud)]",
-                      isLikedOnSoundCloud && "border-[var(--soundcloud)]/50 text-[var(--soundcloud)]"
+                      "grid h-7 w-7 place-items-center rounded-full border border-[var(--edge)] text-[var(--muted)] transition",
+                      likeProvider === "spotify"
+                        ? "hover:border-[var(--spotify)]/60 hover:text-[var(--spotify)]"
+                        : "hover:border-[var(--soundcloud)]/60 hover:text-[var(--soundcloud)]",
+                      isLiked &&
+                        (likeProvider === "spotify"
+                          ? "border-[var(--spotify)]/50 text-[var(--spotify)]"
+                          : "border-[var(--soundcloud)]/50 text-[var(--soundcloud)]")
                     )}
                   >
-                    {isLikedOnSoundCloud ? <HeartOff className="h-3.5 w-3.5" /> : <Heart className="h-3.5 w-3.5" />}
+                    {isLiked ? <HeartOff className="h-3.5 w-3.5" /> : <Heart className="h-3.5 w-3.5" />}
                   </button>
                 ) : null}
                 {track.externalUrl ? (
@@ -3142,6 +3175,8 @@ function SearchPage() {
   const addTrackToPlaylist = useAppStore((state) => state.addTrackToPlaylist);
   const createPlaylist = useAppStore((state) => state.createPlaylist);
   const setSoundCloudTrackLiked = useAppStore((state) => state.setSoundCloudTrackLiked);
+  const setSpotifyTrackLiked = useAppStore((state) => state.setSpotifyTrackLiked);
+  const spotifyLikedTrackIds = useAppStore((state) => state.spotifyLikedTrackIds);
   const playTrack = useAppStore((state) => state.playTrack);
   const storeProvider = useAppStore((state) => state.searchProvider);
   const [query, setQuery] = useState(useAppStore.getState().searchQuery);
@@ -3150,6 +3185,7 @@ function SearchPage() {
   const canSyncSoundCloudLikes =
     connections.soundcloud.status === "connected" &&
     (connections.soundcloud.metadata?.source === "web-session" || Boolean(connections.soundcloud.accessToken));
+  const canSyncSpotifyLikes = connections.spotify.status === "connected";
   const soundCloudLikedTrackIds = useMemo(
     () => new Set((libraries.soundcloud?.items ?? []).map(getTrackUiKey)),
     [libraries.soundcloud?.items]
@@ -3216,6 +3252,9 @@ function SearchPage() {
             canSyncSoundCloudLikes={canSyncSoundCloudLikes}
             soundCloudLikedTrackIds={soundCloudLikedTrackIds}
             onSoundCloudLikeToggle={(track, liked) => void setSoundCloudTrackLiked(track, liked)}
+            canSyncSpotifyLikes={canSyncSpotifyLikes}
+            spotifyLikedTrackIds={spotifyLikedTrackIds}
+            onSpotifyLikeToggle={(track, liked) => void setSpotifyTrackLiked(track, liked)}
           />
         )}
       </SectionCard>
@@ -3718,6 +3757,8 @@ function PlaylistsPage() {
   const connections = useAppStore((state) => state.connections);
   const libraries = useAppStore((state) => state.libraries);
   const setSoundCloudTrackLiked = useAppStore((state) => state.setSoundCloudTrackLiked);
+  const setSpotifyTrackLiked = useAppStore((state) => state.setSpotifyTrackLiked);
+  const spotifyLikedTrackIds = useAppStore((state) => state.spotifyLikedTrackIds);
   const reorderPlaylist = useAppStore((state) => state.reorderPlaylist);
   const playTrack = useAppStore((state) => state.playTrack);
   const playPlaylist = useAppStore((state) => state.playPlaylist);
@@ -3726,6 +3767,7 @@ function PlaylistsPage() {
   const canSyncSoundCloudLikes =
     connections.soundcloud.status === "connected" &&
     (connections.soundcloud.metadata?.source === "web-session" || Boolean(connections.soundcloud.accessToken));
+  const canSyncSpotifyLikes = connections.spotify.status === "connected";
   const soundCloudLikedTrackIds = useMemo(
     () => new Set((libraries.soundcloud?.items ?? []).map(getTrackUiKey)),
     [libraries.soundcloud?.items]
@@ -3867,33 +3909,50 @@ function PlaylistsPage() {
                       </div>
                       <ProviderTag provider={entry.track.provider} />
                     </button>
-                    {canSyncSoundCloudLikes && entry.track.provider === "soundcloud" ? (
-                      <button
-                        type="button"
-                        title={
-                          soundCloudLikedTrackIds.has(getTrackUiKey(entry.track))
-                            ? "Unlike on SoundCloud"
-                            : "Like on SoundCloud"
-                        }
-                        onClick={() =>
-                          void setSoundCloudTrackLiked(
-                            entry.track,
-                            !soundCloudLikedTrackIds.has(getTrackUiKey(entry.track))
-                          )
-                        }
-                        className={cn(
-                          "grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius)] border border-[var(--edge)] text-[var(--muted)] transition hover:border-[var(--soundcloud)]/60 hover:text-[var(--soundcloud)]",
-                          soundCloudLikedTrackIds.has(getTrackUiKey(entry.track)) &&
-                            "border-[var(--soundcloud)]/50 text-[var(--soundcloud)]"
-                        )}
-                      >
-                        {soundCloudLikedTrackIds.has(getTrackUiKey(entry.track)) ? (
-                          <HeartOff className="h-4 w-4" />
-                        ) : (
-                          <Heart className="h-4 w-4" />
-                        )}
-                      </button>
-                    ) : null}
+                    {(() => {
+                      const likeProvider =
+                        canSyncSoundCloudLikes && entry.track.provider === "soundcloud"
+                          ? "soundcloud"
+                          : canSyncSpotifyLikes && entry.track.provider === "spotify"
+                            ? "spotify"
+                            : null;
+                      if (!likeProvider) {
+                        return null;
+                      }
+                      const isLiked =
+                        likeProvider === "soundcloud"
+                          ? soundCloudLikedTrackIds.has(getTrackUiKey(entry.track))
+                          : spotifyLikedTrackIds.has(getTrackUiKey(entry.track));
+                      return (
+                        <button
+                          type="button"
+                          title={
+                            isLiked
+                              ? `Unlike on ${providerLabel(likeProvider)}`
+                              : `Like on ${providerLabel(likeProvider)}`
+                          }
+                          onClick={() => {
+                            if (likeProvider === "soundcloud") {
+                              void setSoundCloudTrackLiked(entry.track, !isLiked);
+                            } else {
+                              void setSpotifyTrackLiked(entry.track, !isLiked);
+                            }
+                          }}
+                          className={cn(
+                            "grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius)] border border-[var(--edge)] text-[var(--muted)] transition",
+                            likeProvider === "spotify"
+                              ? "hover:border-[var(--spotify)]/60 hover:text-[var(--spotify)]"
+                              : "hover:border-[var(--soundcloud)]/60 hover:text-[var(--soundcloud)]",
+                            isLiked &&
+                              (likeProvider === "spotify"
+                                ? "border-[var(--spotify)]/50 text-[var(--spotify)]"
+                                : "border-[var(--soundcloud)]/50 text-[var(--soundcloud)]")
+                          )}
+                        >
+                          {isLiked ? <HeartOff className="h-4 w-4" /> : <Heart className="h-4 w-4" />}
+                        </button>
+                      );
+                    })()}
                     <button
                       type="button"
                       title="Remove from playlist"

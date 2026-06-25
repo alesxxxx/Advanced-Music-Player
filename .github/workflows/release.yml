@@ -1,0 +1,128 @@
+name: Release
+
+# Builds the Windows installer and, on a version tag, drafts a GitHub release you can
+# review and publish. See RELEASING.md for the required secrets and the cut-a-release steps.
+#
+# Triggers:
+#   - push a tag like v0.1.0  -> build + draft a release for that tag
+#   - manual "Run workflow"   -> build + upload the installer as an artifact (no release)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # needed to create the draft release and upload the installer
+
+jobs:
+  windows-installer:
+    name: Windows installer
+    runs-on: windows-latest
+    env:
+      # OAuth / Discord IDs baked into the installer. All optional: an empty secret resolves
+      # to "" and writeBundledConfig.mjs simply skips it, so the build still succeeds and
+      # users can configure their own credentials in-app.
+      SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+      SOUNDCLOUD_CLIENT_ID: ${{ secrets.SOUNDCLOUD_CLIENT_ID }}
+      SOUNDCLOUD_CLIENT_SECRET: ${{ secrets.SOUNDCLOUD_CLIENT_SECRET }}
+      DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable Corepack (activates the pinned pnpm@10.11.0)
+        shell: bash
+        run: corepack enable
+
+      - name: Set up Python (castLabs EVS VMP signer)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fail fast if the tag doesn't match the app version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./apps/desktop/package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::Tag '${GITHUB_REF_NAME}' does not match apps/desktop version '${pkg}'." \
+                 "Bump the version in apps/desktop/package.json (and the root package.json), commit, then re-tag." >&2
+            exit 1
+          fi
+          echo "Tag matches app version ${pkg}."
+
+      - name: Decide whether to VMP-sign
+        id: signing
+        shell: bash
+        env:
+          EVS_ACCOUNT_NAME: ${{ secrets.EVS_ACCOUNT_NAME }}
+        run: |
+          if [ -n "${EVS_ACCOUNT_NAME}" ]; then
+            echo "sign=true" >> "$GITHUB_OUTPUT"
+            echo "VMP signing: ON — DRM-protected SoundCloud tracks will play in this build."
+          else
+            echo "sign=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::VMP signing OFF (no EVS_ACCOUNT_NAME secret)." \
+                 "Everything works except DRM-protected SoundCloud tracks (those need a signed build)."
+          fi
+
+      - name: Authenticate castLabs EVS
+        if: steps.signing.outputs.sign == 'true'
+        shell: bash
+        env:
+          # Non-interactive refresh of an existing EVS session. The account must be created
+          # once, locally, via `python -m castlabs_evs.account signup` (email verification).
+          # NOTE: confirm these env var names against your installed castlabs-evs version.
+          EVS_ACCOUNT_NAME: ${{ secrets.EVS_ACCOUNT_NAME }}
+          EVS_PASSWD: ${{ secrets.EVS_PASSWD }}
+        run: |
+          python -m pip install --upgrade castlabs-evs
+          python -m castlabs_evs.account reauth
+
+      - name: Install dependencies
+        shell: bash
+        run: corepack pnpm install --frozen-lockfile
+
+      - name: Build installer
+        shell: bash
+        env:
+          # The afterPack hook skips signing when this is "1". When signing is on we set "0"
+          # so the hook runs EVS and fails the build if signatures aren't written.
+          AMP_SKIP_VMP: ${{ steps.signing.outputs.sign == 'true' && '0' || '1' }}
+        run: corepack pnpm --filter @amp/desktop dist
+
+      - name: Verify VMP signatures
+        if: steps.signing.outputs.sign == 'true'
+        shell: bash
+        run: corepack pnpm --filter @amp/desktop run verify:vmp
+
+      - name: List build output
+        shell: bash
+        run: ls -la apps/desktop/dist
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: amp-windows-installer
+          path: apps/desktop/dist/*.exe
+          if-no-files-found: error
+
+      - name: Draft GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --draft \
+            --title "AMP ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            apps/desktop/dist/*.exe

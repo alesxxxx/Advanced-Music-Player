@@ -88,9 +88,55 @@ function countSignatureFiles(dir) {
   return count;
 }
 
+/**
+ * Embed AMP's icon (and version/product metadata) into the packaged AMP.exe via rcedit.
+ *
+ * WHY HERE INSTEAD OF electron-builder's `signAndEditExecutable`:
+ * That built-in path unpacks the `winCodeSign` toolchain, whose extraction creates symbolic
+ * links and fails on machines without the symlink privilege (non-admin Windows, Developer Mode
+ * off). So `signAndEditExecutable` stays false and we run rcedit ourselves — it's a standalone
+ * resource editor that needs no symlinks, so it works on both local and CI builds.
+ *
+ * ORDER MATTERS: this runs BEFORE the EVS VMP signing below, so the production VMP signature is
+ * computed over the already-icon-edited binary. Editing AFTER signing would invalidate the .sig
+ * and break DRM playback.
+ */
+async function embedWindowsIcon(appOutDir) {
+  const exePath = path.join(appOutDir, "AMP.exe");
+  const iconPath = path.join(__dirname, "..", "build", "icon.ico");
+  if (!fs.existsSync(exePath)) {
+    log(`rcedit: ${exePath} not found — skipping icon embed.`);
+    return;
+  }
+  if (!fs.existsSync(iconPath)) {
+    log(`rcedit: ${iconPath} not found — skipping icon embed.`);
+    return;
+  }
+  const pkg = require("../package.json");
+  const rcedit = require("rcedit");
+  await rcedit(exePath, {
+    icon: iconPath,
+    "file-version": pkg.version,
+    "product-version": pkg.version,
+    "version-string": {
+      ProductName: "AMP",
+      FileDescription: "AMP",
+      CompanyName: pkg.author || "AMP",
+      LegalCopyright: ""
+    }
+  });
+  log(`rcedit: embedded build/icon.ico + version ${pkg.version} into AMP.exe`);
+}
+
 exports.default = async function signVmp(context) {
   const platform = context.electronPlatformName; // 'win32' | 'darwin' | 'linux'
   const appOutDir = context.appOutDir;
+
+  // Embed the Windows app icon first (independent of VMP signing) so the taskbar / Start-menu /
+  // pinned shortcut show AMP's icon instead of Electron's default. Must precede VMP signing.
+  if (platform === "win32") {
+    await embedWindowsIcon(appOutDir);
+  }
 
   if (process.env.AMP_SKIP_VMP === "1" || process.env.MUSYNC_SKIP_VMP === "1") {
     log("AMP_SKIP_VMP=1 (or legacy MUSYNC_SKIP_VMP) set — skipping VMP signing. This build will NOT play Widevine-gated tracks.");

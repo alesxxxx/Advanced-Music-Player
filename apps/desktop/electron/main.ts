@@ -421,6 +421,12 @@ try {
   logStartup("userData:migration-failed", error);
 }
 
+// Windows uses the AppUserModelID to identify the app for taskbar grouping, pinning and
+// notifications. It must match the NSIS shortcut's AUMID (electron-builder derives that from
+// `build.appId`) so the running window adopts the installed shortcut's AMP icon instead of
+// Electron's default. Harmless on macOS/Linux.
+app.setAppUserModelId("com.amp.desktop");
+
 const singleInstanceLock = app.requestSingleInstanceLock();
 if (!singleInstanceLock) {
   // Make this explicit instead of a silent quit, so "the packaged app won't open" is diagnosable.

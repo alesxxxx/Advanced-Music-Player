@@ -1,7 +1,7 @@
 {
   "name": "@amp/desktop",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "AMP desktop app",
   "author": "alesxxxx",
   "type": "module",
@@ -81,6 +81,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.4",
+    "rcedit": "^4.0.1",
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

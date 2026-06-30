@@ -26,8 +26,7 @@
       "dist/index.html",
       "dist/assets/**/*",
       "dist-electron/**/*",
-      "package.json",
-      "!node_modules/**/*"
+      "package.json"
     ],
     "directories": {
       "buildResources": "build"
